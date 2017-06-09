@@ -57,7 +57,7 @@
 
 /* Default memory limit when running in QEMU mode (MB): */
 
-#define MEM_LIMIT_QEMU      200
+#define MEM_LIMIT_QEMU      2000
 #define MEM_LIMIT_MAX       2048
 
 /* Number of calibration cycles per every new test case (and for test

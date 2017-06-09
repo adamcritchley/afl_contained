@@ -56,6 +56,10 @@
 	#include <sys/ioctl.h>
 	#include <sys/file.h>
 
+#ifdef LXC_ENABLE
+	#include "lxc/lxccontainer.h"
+#endif
+
 	#if defined(__APPLE__) || defined(__FreeBSD__) || defined (__OpenBSD__)
 	#  include <sys/sysctl.h>
 	#endif /* __APPLE__ || __FreeBSD__ || __OpenBSD__ */
@@ -102,6 +106,7 @@
 		   force_deterministic,       /* Force deterministic stages?      */
 		   use_splicing,              /* Recombine input files?           */
 		   dumb_mode,                 /* Run in non-instrumented mode?    */
+                   lxc_mode,                  /* Run in lxc containers instead of execve */
 		   score_changed,             /* Scoring for favorites changed?   */
 		   kill_signal,               /* Signal that killed the child     */
 		   resuming_fuzz,             /* Resuming an older fuzzing job?   */
@@ -2252,10 +2257,28 @@
 	}
 
 
+#ifdef LXC_ENABLE
+	static u8 run_target_in_lxc(char** argv, u32 timeout) {
+	  struct lxc_container *c;
+
+	  /* Setup container struct */
+ 	  c = lxc_container_new("apicontainer", NULL);
+ 	  if (!c) {
+	    FATAL("Failed to setup lxc_container struct\n");
+	  }
+
+	  return 0;
+	}
+#else
+	static u8 run_target_in_lxc(char** argv, u32 timeout) {
+	  return run_target_in_lxc(argv, timeout);
+        }	
+#endif
+
 	/* Execute target application, monitoring for timeouts. Return status
 	   information. The called program will update trace_bits[]. */
 
-	static u8 run_target(char** argv, u32 timeout) {
+	static u8 run_target_in_fork(char** argv, u32 timeout) {
 
 	  static struct itimerval it;
 	  static u32 prev_timed_out = 0;
@@ -2454,6 +2477,12 @@
 
 	}
 
+	static u8 run_target(char** argv, u32 timeout) {
+	  if (lxc_mode)
+	    return run_target_in_lxc(argv, timeout);
+	  else
+	    return run_target_in_fork(argv, timeout);
+	}
 
 	/* Write modified data to file for testing. If out_file is set, the old file
 	   is unlinked and a new one is created. Otherwise, out_fd is rewound and
@@ -7841,6 +7870,10 @@ int main(int argc, char** argv) {
         if (getenv("AFL_DUMB_FORKSRV")) dumb_mode = 2; else dumb_mode = 1;
 
         break;
+
+      case 'X':
+
+        if (getenv("AFL_LXC_MODE")) lxc_mode = 1; else lxc_mode = 0;
 
       case 'T': /* banner */
 

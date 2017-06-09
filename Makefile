@@ -61,6 +61,11 @@ test_x86:
 
 endif
 
+ifdef LXC_ENABLE
+CFLAGS += -DLXC_ENABLE
+LDFLAGS += -llxc
+endif
+
 afl-gcc: afl-gcc.c $(COMM_HDR) | test_x86
 	$(CC) $(CFLAGS) $@.c -o $@ $(LDFLAGS)
 	set -e; for i in afl-g++ afl-clang afl-clang++; do ln -sf afl-gcc $$i; done
