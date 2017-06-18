@@ -83,6 +83,8 @@
 	/* Lots of globals, but mostly for the status UI and other things where it
 	   really makes no sense to haul them around as function parameters. */
 
+  char *lxc_path = "/usr/var/lib/lxc";
+  struct lxc_container *c = NULL;
 
 	EXP_ST u8 *in_dir,                    /* Input directory with test cases  */
 		  *out_file,                  /* File to fuzz, if any             */
@@ -106,7 +108,7 @@
 		   force_deterministic,       /* Force deterministic stages?      */
 		   use_splicing,              /* Recombine input files?           */
 		   dumb_mode,                 /* Run in non-instrumented mode?    */
-                   lxc_mode,                  /* Run in lxc containers instead of execve */
+       lxc_mode,                  /* Run in lxc containers instead of execve */
 		   score_changed,             /* Scoring for favorites changed?   */
 		   kill_signal,               /* Signal that killed the child     */
 		   resuming_fuzz,             /* Resuming an older fuzzing job?   */
@@ -2256,23 +2258,47 @@
 
 	}
 
-
 #ifdef LXC_ENABLE
 	static u8 run_target_in_lxc(char** argv, u32 timeout) {
-	  struct lxc_container *c;
+		char randname[255];
+		char *newname;
 
-	  /* Setup container struct */
- 	  c = lxc_container_new("apicontainer", NULL);
- 	  if (!c) {
-	    FATAL("Failed to setup lxc_container struct\n");
-	  }
+		lxc_attach_options_t attach_options = LXC_ATTACH_OPTIONS_DEFAULT;
+		attach_options.env_policy = LXC_ATTACH_CLEAR_ENV;
 
+		int ret = snprintf(randname, 255, "%s/%s_XXXXXX", lxc_path, c->name);
+		if (ret < 0 || ret >= 255)
+				return -1;
+		if (!mkdtemp(randname))
+				return -1;
+		if (chmod(randname, 0770) < 0) {
+				remove(randname);
+				return -1;
+		}
+		newname = randname + strlen(lxc_path) + 1;
+		char args[] = "";
+
+		struct lxc_container *clone = c->clone(c, newname, lxc_path, LXC_CLONE_SNAPSHOT, NULL, NULL, 0, 0);
+		if (!clone)
+				return -1;
+
+		clone->want_daemonize(clone, true);
+		ret = clone->attach_run_wait(clone,
+						&attach_options,
+						args,
+						(const char *const *)&args);
+		if (ret < 0) {
+				return -2;
+		}
+		clone->shutdown(clone, -1);
+		lxc_container_put(clone);
+		
 	  return 0;
 	}
 #else
 	static u8 run_target_in_lxc(char** argv, u32 timeout) {
-	  return run_target_in_lxc(argv, timeout);
-        }	
+		FATAL("Error: no LXC support available\n");
+  }	
 #endif
 
 	/* Execute target application, monitoring for timeouts. Return status
@@ -2718,6 +2744,7 @@
 	   expected. This is done only for the initial inputs, and only once. */
 
 	static void perform_dry_run(char** argv) {
+        return;
 
 	  struct queue_entry* q = queue;
 	  u32 cal_failures = 0;
@@ -6800,6 +6827,34 @@ static void handle_timeout(int sig) {
 
 }
 
+#ifdef LXC_ENABLE
+EXP_ST void check_container(u8* fname) {
+	char *lxc_copy = strdup(fname);
+	char *path_end = strrchr(lxc_copy, '/');
+	char *cname = lxc_copy;
+
+	/* Modify the lxc path */
+	if( path_end ){
+		*path_end = '\0';
+		lxc_path = lxc_copy;
+		cname = path_end+1;
+	}
+
+	/* Setup container struct */
+	c = lxc_container_new(cname, NULL);
+	if (!c) {
+		FATAL("Failed to setup lxc_container struct\n");
+	}
+
+	if (!c->is_defined(c)) {
+		FATAL("Error: container %s is not defined\n", c->name);
+	}
+}
+#else
+EXP_ST void check_container(u8* fname) {
+		FATAL("Error: no LXC support available\n");
+}
+#endif
 
 /* Do a PATH search and find target binary to see that it exists and
    isn't a shell script - a common and painful mistake. We also check for
@@ -7270,8 +7325,8 @@ static void check_crash_handling(void) {
 
          "    echo core >/proc/sys/kernel/core_pattern\n");
 
-    if (!getenv("AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES"))
-      FATAL("Pipe at the beginning of 'core_pattern'");
+// if (!getenv("AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES"))
+//      FATAL("Pipe at the beginning of 'core_pattern'");
 
   }
  
@@ -7718,7 +7773,7 @@ int main(int argc, char** argv) {
   gettimeofday(&tv, &tz);
   srandom(tv.tv_sec ^ tv.tv_usec ^ getpid());
 
-  while ((opt = getopt(argc, argv, "+i:o:f:m:t:T:dnCB:S:M:x:Q")) > 0)
+  while ((opt = getopt(argc, argv, "+i:o:f:m:t:T:dnCB:S:M:x:XQ")) > 0)
 
     switch (opt) {
 
@@ -7873,7 +7928,7 @@ int main(int argc, char** argv) {
 
       case 'X':
 
-        if (getenv("AFL_LXC_MODE")) lxc_mode = 1; else lxc_mode = 0;
+        lxc_mode = 1;
 
       case 'T': /* banner */
 
@@ -7966,7 +8021,10 @@ int main(int argc, char** argv) {
 
   if (!out_file) setup_stdio_file();
 
-  check_binary(argv[optind]);
+  if (!lxc_mode)
+	  check_binary(argv[optind]);
+  else
+	  check_container(argv[optind]);
 
   start_time = get_cur_time();
 

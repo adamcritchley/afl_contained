@@ -61,6 +61,8 @@ test_x86:
 
 endif
 
+export LXC_ENABLE=1
+
 ifdef LXC_ENABLE
 CFLAGS += -DLXC_ENABLE
 LDFLAGS += -llxc
